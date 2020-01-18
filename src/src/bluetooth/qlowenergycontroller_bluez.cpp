@@ -346,8 +346,8 @@ void QLowEnergyControllerPrivate::handleGattRequestTimeout()
     }
 
     if (!openRequests.isEmpty() && requestPending) {
-        requestPending = false; // reset pending flag
         const Request currentRequest = openRequests.dequeue();
+        requestPending = false; // reset pending flag
 
         qCWarning(QT_BT_BLUEZ).nospace() << "****** Request type 0x" << hex << currentRequest.command
                            << " to server/peripheral timed out";
@@ -372,7 +372,6 @@ void QLowEnergyControllerPrivate::handleGattRequestTimeout()
         case ATT_OP_EXCHANGE_MTU_REQUEST:  // MTU change request
             // never received reply to MTU request
             // it is safe to skip and go to next request
-            sendNextPendingRequest();
             break;
         case ATT_OP_READ_BY_GROUP_REQUEST: // primary or secondary service discovery
         case ATT_OP_READ_BY_TYPE_REQUEST:  // characteristic or included service discovery
@@ -406,8 +405,13 @@ void QLowEnergyControllerPrivate::handleGattRequestTimeout()
             break;
         default:
             // not a command used by central role implementation
-            return;
+            qCWarning(QT_BT_BLUEZ) << "Missing response for ATT peripheral command: "
+                                   << hex << command;
+            break;
         }
+
+        // spin openRequest queue further
+        sendNextPendingRequest();
     }
 }
 
@@ -527,8 +531,10 @@ void QLowEnergyControllerPrivate::connectToDevice()
     }
 
     setState(QLowEnergyController::ConnectingState);
-    if (l2cpSocket)
+    if (l2cpSocket) {
         delete l2cpSocket;
+        l2cpSocket = nullptr;
+    }
 
     createServicesForCentralIfRequired();
 
@@ -581,6 +587,7 @@ void QLowEnergyControllerPrivate::activeConnectionTerminationDone()
         qCWarning(QT_BT_BLUEZ) << "Cannot close pending external BTLE connections. Aborting connect attempt";
         setError(QLowEnergyController::ConnectionError);
         setState(QLowEnergyController::UnconnectedState);
+        l2cpDisconnected();
         return;
     } else {
         establishL2cpClientSocket();
@@ -726,8 +733,16 @@ void QLowEnergyControllerPrivate::l2cpConnected()
 void QLowEnergyControllerPrivate::disconnectFromDevice()
 {
     setState(QLowEnergyController::ClosingState);
-    l2cpSocket->close();
+    if (l2cpSocket)
+        l2cpSocket->close();
     resetController();
+
+    // this may happen when RemoteDeviceManager::JobType::JobDisconnectDevice
+    // is pending.
+    if (!l2cpSocket) {
+        qWarning(QT_BT_BLUEZ) << "Unexpected closure of device. Cleaning up internal states.";
+        l2cpDisconnected();
+    }
 }
 
 void QLowEnergyControllerPrivate::l2cpDisconnected()
@@ -1229,9 +1244,9 @@ void QLowEnergyControllerPrivate::processReply(
             } else if (!isServiceDiscoveryRun) {
                 // not encryption problem -> abort readCharacteristic()/readDescriptor() run
                 if (!descriptorHandle)
-                    emit service->error(QLowEnergyService::CharacteristicReadError);
+                    service->setError(QLowEnergyService::CharacteristicReadError);
                 else
-                    emit service->error(QLowEnergyService::DescriptorReadError);
+                    service->setError(QLowEnergyService::DescriptorReadError);
             }
         } else {
             if (!descriptorHandle)
