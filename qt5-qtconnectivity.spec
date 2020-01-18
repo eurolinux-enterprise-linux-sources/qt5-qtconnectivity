@@ -3,26 +3,28 @@
 
 %define docs 1
 
-#define prerelease
-
 Summary: Qt5 - Connectivity components
 Name:    qt5-%{qt_module}
-Version: 5.6.1
-Release: 10%{?prerelease:.%{prerelease}}%{?dist}
+Version: 5.6.2
+Release: 1%{?dist}
 
 # See LICENSE.GPL3, respectively, for exception details
 License: LGPLv2 with exceptions or GPLv3 with exceptions
-Url:     http://qt.io
-Source0: http://download.qt.io/snapshots/qt/5.6/%{version}%{?prerelease:-%{prerelease}}/submodules/%{qt_module}-opensource-src-%{version}%{?prerelease:-%{prerelease}}.tar.xz
+Url:     http://www.qt.io
+Source0: http://download.qt.io/official_releases/qt/5.6/%{version}/submodules/%{qt_module}-opensource-src-%{version}.tar.xz
 
 ## upstreamable patches
 # bswap_16 apparently missing on el6/ppc64
 Patch50: qtconnectivity-opensource-src-5.4.0-bswap_16.patch
+# NEEDSWORK, fix FTBFS on rhel6
+Patch51: qtconnectivity-opensource-src-5.6.1-bluez_el6.patch
+# htonl undefined, include arpa/inet.h
+Patch52: qtconnectivity-opensource-src-5.6.2-arpa_inet.patch
 
 BuildRequires: cmake
 BuildRequires: qt5-qtbase-devel >= %{version}
+BuildRequires: qt5-qtdeclarative-devel
 BuildRequires: pkgconfig(bluez)
-BuildRequires: pkgconfig(Qt5Quick)
 
 %{?_qt5:Requires: %{_qt5}%{?_isa} >= %{_qt5_version}}
 
@@ -55,9 +57,12 @@ Requires: %{name}%{?_isa} = %{version}-%{release}
 
 
 %prep
-%setup -q -n %{qt_module}-opensource-src-%{version}%{?prerelease:-%{prerelease}}
+%setup -q -n %{qt_module}-opensource-src-%{version}
 %patch50 -p1 -b .bswap_16
-
+%if 0%{?rhel} == 6
+%patch51 -p1 -b .bluez_el6
+%endif
+%patch52 -p1 -b .arpa_inet
 
 %build
 mkdir %{_target_platform}
@@ -148,6 +153,10 @@ popd
 
 
 %changelog
+* Wed Jan 11 2017 Jan Grulich <jgrulich@redhat.com> - 5.6.2-1
+- Update to 5.6.2
+  Resolves: bz#1384816
+
 * Tue Aug 30 2016 Jan Grulich <jgrulich@redhat.com> - 5.6.1-10
 - Increase build version to have newer version than in EPEL
   Resolves: bz#1317399
