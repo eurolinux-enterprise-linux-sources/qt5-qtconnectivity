@@ -1,31 +1,37 @@
 /****************************************************************************
 **
-** Copyright (C) 2015 The Qt Company Ltd.
-** Contact: http://www.qt.io/licensing/
+** Copyright (C) 2016 The Qt Company Ltd.
+** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the QtBluetooth module of the Qt Toolkit.
 **
-** $QT_BEGIN_LICENSE:LGPL21$
+** $QT_BEGIN_LICENSE:LGPL$
 ** Commercial License Usage
 ** Licensees holding valid commercial Qt licenses may use this file in
 ** accordance with the commercial license agreement provided with the
 ** Software or, alternatively, in accordance with the terms contained in
 ** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see http://www.qt.io/terms-conditions. For further
-** information use the contact form at http://www.qt.io/contact-us.
+** and conditions see https://www.qt.io/terms-conditions. For further
+** information use the contact form at https://www.qt.io/contact-us.
 **
 ** GNU Lesser General Public License Usage
 ** Alternatively, this file may be used under the terms of the GNU Lesser
-** General Public License version 2.1 or version 3 as published by the Free
-** Software Foundation and appearing in the file LICENSE.LGPLv21 and
-** LICENSE.LGPLv3 included in the packaging of this file. Please review the
-** following information to ensure the GNU Lesser General Public License
-** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
+** General Public License version 3 as published by the Free Software
+** Foundation and appearing in the file LICENSE.LGPL3 included in the
+** packaging of this file. Please review the following information to
+** ensure the GNU Lesser General Public License version 3 requirements
+** will be met: https://www.gnu.org/licenses/lgpl-3.0.html.
 **
-** As a special exception, The Qt Company gives you certain additional
-** rights. These rights are described in The Qt Company LGPL Exception
-** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+** GNU General Public License Usage
+** Alternatively, this file may be used under the terms of the GNU
+** General Public License version 2.0 or (at your option) the GNU General
+** Public license version 3 or any later version approved by the KDE Free
+** Qt Foundation. The licenses are as published by the Free Software
+** Foundation and appearing in the file LICENSE.GPL2 and LICENSE.GPL3
+** included in the packaging of this file. Please review the following
+** information to ensure the GNU General Public License requirements will
+** be met: https://www.gnu.org/licenses/gpl-2.0.html and
+** https://www.gnu.org/licenses/gpl-3.0.html.
 **
 ** $QT_END_LICENSE$
 **
@@ -37,7 +43,6 @@
 #include "osxbtnotifier_p.h"
 
 #include <QtCore/qloggingcategory.h>
-#include <QtCore/qsysinfo.h>
 #include <QtCore/qdebug.h>
 
 #include <algorithm>
@@ -80,7 +85,6 @@ NSUInteger qt_countGATTEntries(CBService *service)
 
 QT_END_NAMESPACE
 
-QT_USE_NAMESPACE
 
 @interface QT_MANGLE_NAMESPACE(OSXBTCentralManager) (PrivateAPI)
 
@@ -111,7 +115,7 @@ QT_USE_NAMESPACE
 
 @implementation QT_MANGLE_NAMESPACE(OSXBTCentralManager)
 
-- (id)initWith:(OSXBluetooth::LECentralNotifier *)aNotifier
+- (id)initWith:(OSXBluetooth::LECBManagerNotifier *)aNotifier
 {
     if (self = [super init]) {
         manager = nil;
@@ -166,9 +170,9 @@ QT_USE_NAMESPACE
 
         if (!manager) {
             managerState = OSXBluetooth::CentralManagerIdle;
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "failed to allocate a central manager";
+            qCWarning(QT_BT_OSX) << "failed to allocate a central manager";
             if (notifier)
-                emit notifier->CBCentralManagerError(QLowEnergyController::ConnectionError);
+                emit notifier->CBManagerError(QLowEnergyController::ConnectionError);
         }
     } else if (managerState != OSXBluetooth::CentralManagerUpdating) {
         [self retrievePeripheralAndConnect];
@@ -182,7 +186,7 @@ QT_USE_NAMESPACE
                Q_FUNC_INFO, "invalid state");
 
     if ([self isConnected]) {
-        qCDebug(QT_BT_OSX) << Q_FUNC_INFO << "already connected";
+        qCDebug(QT_BT_OSX) << "already connected";
         if (notifier)
             emit notifier->connected();
         return;
@@ -198,62 +202,37 @@ QT_USE_NAMESPACE
     // Retrieve a peripheral first ...
     ObjCScopedPointer<NSMutableArray> uuids([[NSMutableArray alloc] init]);
     if (!uuids) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "failed to allocate identifiers";
+        qCWarning(QT_BT_OSX) << "failed to allocate identifiers";
         if (notifier)
-            emit notifier->CBCentralManagerError(QLowEnergyController::ConnectionError);
+            emit notifier->CBManagerError(QLowEnergyController::ConnectionError);
         return;
     }
 
-#if QT_MAC_PLATFORM_SDK_EQUAL_OR_ABOVE(__MAC_10_9, __IPHONE_7_0)
-    if (QSysInfo::MacintoshVersion >= qt_OS_limit(QSysInfo::MV_10_9, QSysInfo::MV_IOS_7_0)) {
-        const quint128 qtUuidData(deviceUuid.toUInt128());
-        // STATIC_ASSERT on sizes would be handy!
-        uuid_t uuidData = {};
-        std::copy(qtUuidData.data, qtUuidData.data + 16, uuidData);
-        const ObjCScopedPointer<NSUUID> nsUuid([[NSUUID alloc] initWithUUIDBytes:uuidData]);
-        if (!nsUuid) {
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "failed to allocate NSUUID identifier";
-            if (notifier)
-                emit notifier->CBCentralManagerError(QLowEnergyController::ConnectionError);
-            return;
-        }
 
-        [uuids addObject:nsUuid];
-        // With the latest CoreBluetooth, we can synchronously retrive peripherals:
-        QT_BT_MAC_AUTORELEASEPOOL;
-        NSArray *const peripherals = [manager retrievePeripheralsWithIdentifiers:uuids];
-        if (!peripherals || peripherals.count != 1) {
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "failed to retrive a peripheral";
-            if (notifier)
-                emit notifier->CBCentralManagerError(QLowEnergyController::UnknownRemoteDeviceError);
-            return;
-        }
-
-        peripheral = [static_cast<CBPeripheral *>([peripherals objectAtIndex:0]) retain];
-        [self connectToPeripheral];
-        return;
-    }
-#endif
-    // Either SDK or the target is below 10.9/7.0
-    if (![manager respondsToSelector:@selector(retrievePeripherals:)]) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "failed to retrive a peripheral";
+    const quint128 qtUuidData(deviceUuid.toUInt128());
+    uuid_t uuidData = {};
+    std::copy(qtUuidData.data, qtUuidData.data + 16, uuidData);
+    const ObjCScopedPointer<NSUUID> nsUuid([[NSUUID alloc] initWithUUIDBytes:uuidData]);
+    if (!nsUuid) {
+        qCWarning(QT_BT_OSX) << "failed to allocate NSUUID identifier";
         if (notifier)
-            emit notifier->CBCentralManagerError(QLowEnergyController::UnknownRemoteDeviceError);
+            emit notifier->CBManagerError(QLowEnergyController::ConnectionError);
         return;
     }
 
-    OSXBluetooth::CFStrongReference<CFUUIDRef> cfUuid(OSXBluetooth::cf_uuid(deviceUuid));
-    if (!cfUuid) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "failed to create CFUUID object";
+    [uuids addObject:nsUuid];
+    // With the latest CoreBluetooth, we can synchronously retrive peripherals:
+    QT_BT_MAC_AUTORELEASEPOOL;
+    NSArray *const peripherals = [manager retrievePeripheralsWithIdentifiers:uuids];
+    if (!peripherals || peripherals.count != 1) {
+        qCWarning(QT_BT_OSX) << "failed to retrive a peripheral";
         if (notifier)
-            emit notifier->CBCentralManagerError(QLowEnergyController::ConnectionError);
+            emit notifier->CBManagerError(QLowEnergyController::UnknownRemoteDeviceError);
         return;
     }
-    // With ARC this cast will be illegal:
-    [uuids addObject:(id)cfUuid.data()];
-    // Unfortunately, with old Core Bluetooth this call is asynchronous ...
-    managerState = OSXBluetooth::CentralManagerConnecting;
-    [manager performSelector:@selector(retrievePeripherals:) withObject:uuids.data()];
+
+    peripheral = [static_cast<CBPeripheral *>([peripherals objectAtIndex:0]) retain];
+    [self connectToPeripheral];
 }
 
 - (void)connectToPeripheral
@@ -265,11 +244,11 @@ QT_USE_NAMESPACE
 
     // The state is still the same - connecting.
     if ([self isConnected]) {
-        qCDebug(QT_BT_OSX) << Q_FUNC_INFO << "already connected";
+        qCDebug(QT_BT_OSX) << "already connected";
         if (notifier)
             emit notifier->connected();
     } else {
-        qCDebug(QT_BT_OSX) << Q_FUNC_INFO << "trying to connect";
+        qCDebug(QT_BT_OSX) << "trying to connect";
         managerState = OSXBluetooth::CentralManagerConnecting;
         [manager connectPeripheral:peripheral options:nil];
     }
@@ -280,18 +259,7 @@ QT_USE_NAMESPACE
     if (!peripheral)
         return false;
 
-#if QT_MAC_PLATFORM_SDK_EQUAL_OR_ABOVE(__MAC_10_9, __IPHONE_7_0)
-    using OSXBluetooth::qt_OS_limit;
-
-    if (QSysInfo::MacintoshVersion >= qt_OS_limit(QSysInfo::MV_10_9, QSysInfo::MV_IOS_7_0))
-        return peripheral.state == CBPeripheralStateConnected;
-#endif
-    // Either SDK or the target is below 10.9/7.0 ...
-    if (![peripheral respondsToSelector:@selector(isConnected)])
-        return false;
-
-    // Ugly cast to deal with id being a pointer ...
-    return reinterpret_cast<quintptr>([peripheral performSelector:@selector(isConnected)]);
+    return peripheral.state == CBPeripheralStateConnected;
 }
 
 - (void)disconnectFromDevice
@@ -384,7 +352,7 @@ QT_USE_NAMESPACE
     Q_ASSERT_X(peripheral, Q_FUNC_INFO, "invalid peripheral (nil)");
 
     if (servicesToDiscoverDetails.contains(serviceUuid)) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO <<"already discovering for "
+        qCWarning(QT_BT_OSX) << "already discovering for"
                              << serviceUuid;
         return;
     }
@@ -397,11 +365,11 @@ QT_USE_NAMESPACE
         return;
     }
 
-    qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "unknown service uuid "
+    qCWarning(QT_BT_OSX) << "unknown service uuid"
                          << serviceUuid;
 
     if (notifier) {
-        emit notifier->CBCentralManagerError(serviceUuid,
+        emit notifier->CBManagerError(serviceUuid,
                        QLowEnergyService::UnknownError);
     }
 }
@@ -494,9 +462,9 @@ QT_USE_NAMESPACE
     const QLowEnergyHandle maxHandle = std::numeric_limits<QLowEnergyHandle>::max();
     if (nHandles >= maxHandle || lastValidHandle > maxHandle - nHandles) {
         // Well, that's unlikely :) But we must be sure.
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "can not allocate more handles";
+        qCWarning(QT_BT_OSX) << "can not allocate more handles";
         if (notifier)
-            notifier->CBCentralManagerError(serviceUuid, QLowEnergyService::OperationError);
+            notifier->CBManagerError(serviceUuid, QLowEnergyService::OperationError);
         return;
     }
 
@@ -598,7 +566,7 @@ QT_USE_NAMESPACE
     const LERequest request(requests.dequeue());
     if (request.type == LERequest::CharRead) {
         if (!charMap.contains(request.handle)) {
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "characteristic with handle"
+            qCWarning(QT_BT_OSX) << "characteristic with handle"
                                  << request.handle << "not found";
             return [self performNextRequest];
         }
@@ -608,7 +576,7 @@ QT_USE_NAMESPACE
         [peripheral readValueForCharacteristic:charMap[request.handle]];
     } else {
         if (!descMap.contains(request.handle)) {
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "descriptor with handle"
+            qCWarning(QT_BT_OSX) << "descriptor with handle"
                                  << request.handle << "not found";
             return [self performNextRequest];
         }
@@ -635,8 +603,8 @@ QT_USE_NAMESPACE
 
     if (request.type == LERequest::DescWrite) {
         if (!descMap.contains(request.handle)) {
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "handle: "
-                                 << request.handle << " not found";
+            qCWarning(QT_BT_OSX) << "handle:" << request.handle
+                                 << "not found";
             return [self performNextRequest];
         }
 
@@ -644,8 +612,7 @@ QT_USE_NAMESPACE
         ObjCStrongReference<NSData> data(data_from_bytearray(request.value));
         if (!data) {
             // Even if qtData.size() == 0, we still need NSData object.
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "failed "
-                                    "to allocate an NSData object";
+            qCWarning(QT_BT_OSX) << "failed to allocate an NSData object";
             return [self performNextRequest];
         }
 
@@ -656,8 +623,8 @@ QT_USE_NAMESPACE
         return [peripheral writeValue:data.data() forDescriptor:descriptor];
     } else {
         if (!charMap.contains(request.handle)) {
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "characteristic with "
-                                    "handle: " << request.handle << " not found";
+            qCWarning(QT_BT_OSX) << "characteristic with handle:"
+                                 << request.handle << "not found";
             return [self performNextRequest];
         }
 
@@ -682,7 +649,7 @@ QT_USE_NAMESPACE
             ObjCStrongReference<NSData> data(data_from_bytearray(request.value));
             if (!data) {
                 // Even if qtData.size() == 0, we still need NSData object.
-                qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "failed to allocate NSData object";
+                qCWarning(QT_BT_OSX) << "failed to allocate NSData object";
                 return [self performNextRequest];
             }
 
@@ -712,11 +679,10 @@ QT_USE_NAMESPACE
     Q_ASSERT_X(charHandle, Q_FUNC_INFO, "invalid characteristic handle (0)");
 
     if (!charMap.contains(charHandle)) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO
-                             << "unknown characteristic handle "
+        qCWarning(QT_BT_OSX) << "unknown characteristic handle"
                              << charHandle;
         if (notifier) {
-            emit notifier->CBCentralManagerError(serviceUuid,
+            emit notifier->CBManagerError(serviceUuid,
                            QLowEnergyService::DescriptorWriteError);
         }
         return;
@@ -727,10 +693,9 @@ QT_USE_NAMESPACE
     // it back, so check _now_ that we really have this descriptor.
     const QBluetoothUuid qtUuid(QBluetoothUuid::ClientCharacteristicConfiguration);
     if (![self descriptor:qtUuid forCharacteristic:charMap[charHandle]]) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO
-                             << "no client characteristic configuration found";
+        qCWarning(QT_BT_OSX) << "no client characteristic configuration found";
         if (notifier) {
-            emit notifier->CBCentralManagerError(serviceUuid,
+            emit notifier->CBManagerError(serviceUuid,
                            QLowEnergyService::DescriptorWriteError);
         }
         return;
@@ -755,9 +720,9 @@ QT_USE_NAMESPACE
     QT_BT_MAC_AUTORELEASEPOOL;
 
     if (!charMap.contains(charHandle)) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "characteristic: " << charHandle << " not found";
+        qCWarning(QT_BT_OSX) << "characteristic:" << charHandle << "not found";
         if (notifier) {
-            emit notifier->CBCentralManagerError(serviceUuid,
+            emit notifier->CBManagerError(serviceUuid,
                            QLowEnergyService::CharacteristicReadError);
 
         }
@@ -784,10 +749,9 @@ QT_USE_NAMESPACE
     QT_BT_MAC_AUTORELEASEPOOL;
 
     if (!charMap.contains(charHandle)) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "characteristic: "
-                             << charHandle << " not found";
+        qCWarning(QT_BT_OSX) << "characteristic:" << charHandle << "not found";
         if (notifier) {
-            emit notifier->CBCentralManagerError(serviceUuid,
+            emit notifier->CBManagerError(serviceUuid,
                            QLowEnergyService::CharacteristicWriteError);
         }
         return;
@@ -811,10 +775,9 @@ QT_USE_NAMESPACE
     Q_ASSERT_X(descHandle, Q_FUNC_INFO, "invalid descriptor handle (0)");
 
     if (!descMap.contains(descHandle)) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "handle:"
-                             << descHandle << "not found";
+        qCWarning(QT_BT_OSX) << "handle:" << descHandle << "not found";
         if (notifier) {
-            emit notifier->CBCentralManagerError(serviceUuid,
+            emit notifier->CBManagerError(serviceUuid,
                            QLowEnergyService::DescriptorReadError);
         }
         return;
@@ -837,10 +800,9 @@ QT_USE_NAMESPACE
     Q_ASSERT_X(descHandle, Q_FUNC_INFO, "invalid descriptor handle (0)");
 
     if (!descMap.contains(descHandle)) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "handle: "
-                             << descHandle << " not found";
+        qCWarning(QT_BT_OSX) << "handle:" << descHandle << "not found";
         if (notifier) {
-            emit notifier->CBCentralManagerError(serviceUuid,
+            emit notifier->CBManagerError(serviceUuid,
                            QLowEnergyService::DescriptorWriteError);
         }
         return;
@@ -1024,27 +986,25 @@ QT_USE_NAMESPACE
     if ([obj isKindOfClass:[CBCharacteristic class]]) {
         CBCharacteristic *const ch = static_cast<CBCharacteristic *>(obj);
         if (!charMap.key(ch)) {
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "unexpected "
-                                    "characteristic, no handle found";
+            qCWarning(QT_BT_OSX) << "unexpected characteristic, no handle found";
             return false;
         }
     } else if ([obj isKindOfClass:[CBDescriptor class]]) {
         CBDescriptor *const d = static_cast<CBDescriptor *>(obj);
         if (!descMap.key(d)) {
-            qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "unexpected "
-                                    "descriptor, no handle found";
+            qCWarning(QT_BT_OSX) << "unexpected descriptor, no handle found";
             return false;
         }
     } else {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "invalid object, "
-                                "characteristic or descriptor required";
+        qCWarning(QT_BT_OSX) << "invalid object, characteristic "
+                                "or descriptor required";
         return false;
     }
 
     if (valuesToWrite.contains(obj)) {
         // It can be a result of some previous errors - for example,
         // we never got a callback from a previous write.
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "already has a cached value for this "
+        qCWarning(QT_BT_OSX) << "already has a cached value for this "
                                 "object, the value will be replaced";
     }
 
@@ -1072,10 +1032,14 @@ QT_USE_NAMESPACE
 {
     using namespace OSXBluetooth;
 
-    const CBCentralManagerState state = central.state;
-
+    const auto state = central.state;
+#if QT_IOS_PLATFORM_SDK_EQUAL_OR_ABOVE(__IPHONE_10_0) || QT_OSX_PLATFORM_SDK_EQUAL_OR_ABOVE(__MAC_10_13)
+    if (state == CBManagerStateUnknown
+        || state == CBManagerStateResetting) {
+#else
     if (state == CBCentralManagerStateUnknown
         || state == CBCentralManagerStateResetting) {
+#endif
         // We still have to wait, docs say:
         // "The current state of the central manager is unknown;
         // an update is imminent." or
@@ -1085,7 +1049,11 @@ QT_USE_NAMESPACE
     }
 
     // Let's check some states we do not like first:
+#if QT_IOS_PLATFORM_SDK_EQUAL_OR_ABOVE(__IPHONE_10_0) || QT_OSX_PLATFORM_SDK_EQUAL_OR_ABOVE(__MAC_10_13)
+    if (state == CBManagerStateUnsupported || state == CBManagerStateUnauthorized) {
+#else
     if (state == CBCentralManagerStateUnsupported || state == CBCentralManagerStateUnauthorized) {
+#endif
         if (managerState == CentralManagerUpdating) {
             // We tried to connect just to realize, LE is not supported. Report this.
             managerState = CentralManagerIdle;
@@ -1096,12 +1064,16 @@ QT_USE_NAMESPACE
             // and reset managerState from CentralManagerUpdating.
             managerState = CentralManagerIdle;
             if (notifier)
-                emit notifier->CBCentralManagerError(QLowEnergyController::InvalidBluetoothAdapterError);
+                emit notifier->CBManagerError(QLowEnergyController::InvalidBluetoothAdapterError);
         }
         return;
     }
 
+#if QT_IOS_PLATFORM_SDK_EQUAL_OR_ABOVE(__IPHONE_10_0) || QT_OSX_PLATFORM_SDK_EQUAL_OR_ABOVE(__MAC_10_13)
+    if (state == CBManagerStatePoweredOff) {
+#else
     if (state == CBCentralManagerStatePoweredOff) {
+#endif
         managerState = CentralManagerIdle;
         if (managerState == CentralManagerUpdating) {
             // I've seen this instead of Unsupported on OS X.
@@ -1111,12 +1083,16 @@ QT_USE_NAMESPACE
             // TODO: we need a better error +
             // what will happen if later the state changes to PoweredOn???
             if (notifier)
-                emit notifier->CBCentralManagerError(QLowEnergyController::InvalidBluetoothAdapterError);
+                emit notifier->CBManagerError(QLowEnergyController::InvalidBluetoothAdapterError);
         }
         return;
     }
 
+#if QT_IOS_PLATFORM_SDK_EQUAL_OR_ABOVE(__IPHONE_10_0) || QT_OSX_PLATFORM_SDK_EQUAL_OR_ABOVE(__MAC_10_13)
+    if (state == CBManagerStatePoweredOn) {
+#else
     if (state == CBCentralManagerStatePoweredOn) {
+#endif
         if (managerState == CentralManagerUpdating && !disconnectPending) {
             managerState = CentralManagerIdle;
             [self retrievePeripheralAndConnect];
@@ -1124,30 +1100,6 @@ QT_USE_NAMESPACE
     } else {
         // We actually handled all known states, but .. Core Bluetooth can change?
         Q_ASSERT_X(0, Q_FUNC_INFO, "invalid centra's state");
-    }
-}
-
-- (void)centralManager:(CBCentralManager *)central didRetrievePeripherals:(NSArray *)peripherals
-{
-    Q_UNUSED(central)
-
-    // This method is required for iOS before 7.0 and OS X below 10.9.
-    Q_ASSERT_X(manager, Q_FUNC_INFO, "invalid central manager (nil)");
-
-    if (managerState != OSXBluetooth::CentralManagerConnecting) {
-        // Canceled by calling -disconnectFromDevice method.
-        return;
-    }
-
-    managerState = OSXBluetooth::CentralManagerIdle;
-
-    if (!peripherals || peripherals.count != 1) {
-        qCDebug(QT_BT_OSX) << Q_FUNC_INFO <<"unexpected number of peripherals (!= 1)";
-        if (notifier)
-            emit notifier->CBCentralManagerError(QLowEnergyController::UnknownRemoteDeviceError);
-    } else {
-        peripheral = [static_cast<CBPeripheral *>([peripherals objectAtIndex:0]) retain];
-        [self connectToPeripheral];
     }
 }
 
@@ -1181,7 +1133,7 @@ QT_USE_NAMESPACE
     managerState = OSXBluetooth::CentralManagerIdle;
     // TODO: better error mapping is required.
     if (notifier)
-        notifier->CBCentralManagerError(QLowEnergyController::UnknownRemoteDeviceError);
+        notifier->CBManagerError(QLowEnergyController::UnknownRemoteDeviceError);
 }
 
 - (void)centralManager:(CBCentralManager *)central didDisconnectPeripheral:(CBPeripheral *)aPeripheral
@@ -1195,9 +1147,9 @@ QT_USE_NAMESPACE
 
     if (error && managerState == OSXBluetooth::CentralManagerDisconnecting) {
         managerState = OSXBluetooth::CentralManagerIdle;
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "failed to disconnect";
+        qCWarning(QT_BT_OSX) << "failed to disconnect";
         if (notifier)
-            emit notifier->CBCentralManagerError(QLowEnergyController::UnknownRemoteDeviceError);
+            emit notifier->CBManagerError(QLowEnergyController::UnknownRemoteDeviceError);
     } else {
         managerState = OSXBluetooth::CentralManagerIdle;
         if (notifier)
@@ -1222,7 +1174,7 @@ QT_USE_NAMESPACE
         NSLog(@"%s failed with error %@", Q_FUNC_INFO, error);
         // TODO: better error mapping required.
         if (notifier)
-            emit notifier->CBCentralManagerError(QLowEnergyController::UnknownError);
+            emit notifier->CBManagerError(QLowEnergyController::UnknownError);
     } else {
         [self discoverIncludedServices];
     }
@@ -1318,7 +1270,7 @@ QT_USE_NAMESPACE
         NSLog(@"%s failed with error: %@", Q_FUNC_INFO, error);
         // We did not discover any characteristics and can not discover descriptors,
         // inform our delegate (it will set a service state also).
-        emit notifier->CBCentralManagerError(qt_uuid(service.UUID), QLowEnergyController::UnknownError);
+        emit notifier->CBManagerError(qt_uuid(service.UUID), QLowEnergyController::UnknownError);
     } else {
         [self readCharacteristics:service];
     }
@@ -1353,7 +1305,7 @@ QT_USE_NAMESPACE
             if (chHandle && chHandle == currentReadHandle) {
                 currentReadHandle = 0;
                 requestPending = false;
-                emit notifier->CBCentralManagerError(qtUuid, QLowEnergyService::CharacteristicReadError);
+                emit notifier->CBManagerError(qtUuid, QLowEnergyService::CharacteristicReadError);
                 [self performNextRequest];
             }
             return;
@@ -1376,7 +1328,7 @@ QT_USE_NAMESPACE
         // updated values ...
         // TODO: this must be properly tested.
         if (!chHandle) {
-            qCCritical(QT_BT_OSX) << Q_FUNC_INFO << "unexpected update notification, "
+            qCCritical(QT_BT_OSX) << "unexpected update notification, "
                                      "no characteristic handle found";
             return;
         }
@@ -1455,7 +1407,7 @@ QT_USE_NAMESPACE
             if (dHandle && dHandle == currentReadHandle) {
                 currentReadHandle = 0;
                 requestPending = false;
-                emit notifier->CBCentralManagerError(qtUuid, QLowEnergyService::DescriptorReadError);
+                emit notifier->CBManagerError(qtUuid, QLowEnergyService::DescriptorReadError);
                 [self performNextRequest];
             }
             return;
@@ -1487,7 +1439,7 @@ QT_USE_NAMESPACE
         }
     } else {
         if (!dHandle) {
-            qCCritical(QT_BT_OSX) << Q_FUNC_INFO << "unexpected value update notification, "
+            qCCritical(QT_BT_OSX) << "unexpected value update notification, "
                                      "no descriptor handle found";
             return;
         }
@@ -1530,13 +1482,13 @@ QT_USE_NAMESPACE
     // Error or not, but the cached value has to be deleted ...
     const QByteArray valueToReport(valuesToWrite.value(characteristic, QByteArray()));
     if (!valuesToWrite.remove(characteristic)) {
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "no updated value found"
-                                " for characteristic";
+        qCWarning(QT_BT_OSX) << "no updated value found "
+                                "for characteristic";
     }
 
     if (error) {
         NSLog(@"%s failed with error %@", Q_FUNC_INFO, error);
-        emit notifier->CBCentralManagerError(qt_uuid(characteristic.service.UUID),
+        emit notifier->CBManagerError(qt_uuid(characteristic.service.UUID),
                                              QLowEnergyService::CharacteristicWriteError);
     } else {
         const QLowEnergyHandle cHandle = charMap.key(characteristic);
@@ -1566,16 +1518,15 @@ QT_USE_NAMESPACE
     // Error or not, a value (if any) must be removed.
     const QByteArray valueToReport(valuesToWrite.value(descriptor, QByteArray()));
     if (!valuesToWrite.remove(descriptor))
-        qCWarning(QT_BT_OSX) << Q_FUNC_INFO << "no updated value found";
+        qCWarning(QT_BT_OSX) << "no updated value found";
 
     if (error) {
         NSLog(@"%s failed with error %@", Q_FUNC_INFO, error);
-        emit notifier->CBCentralManagerError(qt_uuid(descriptor.characteristic.service.UUID),
+        emit notifier->CBManagerError(qt_uuid(descriptor.characteristic.service.UUID),
                        QLowEnergyService::DescriptorWriteError);
     } else {
         const QLowEnergyHandle dHandle = descMap.key(descriptor);
-        Q_ASSERT_X(dHandle, Q_FUNC_INFO,
-                   "descriptor not found in the descriptors map");
+        Q_ASSERT_X(dHandle, Q_FUNC_INFO, "descriptor not found in the descriptors map");
         emit notifier->descriptorWritten(dHandle, valueToReport);
     }
 
@@ -1605,7 +1556,7 @@ QT_USE_NAMESPACE
     if (error) {
         NSLog(@"%s failed with error %@", Q_FUNC_INFO, error);
         // In Qt's API it's a descriptor write actually.
-        emit notifier->CBCentralManagerError(qt_uuid(characteristic.service.UUID),
+        emit notifier->CBManagerError(qt_uuid(characteristic.service.UUID),
                                              QLowEnergyService::DescriptorWriteError);
     } else if (nRemoved) {
         const QLowEnergyHandle dHandle = descMap.key(descriptor);

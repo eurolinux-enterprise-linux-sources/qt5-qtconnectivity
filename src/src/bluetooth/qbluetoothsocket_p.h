@@ -1,31 +1,37 @@
 /****************************************************************************
 **
-** Copyright (C) 2015 The Qt Company Ltd.
-** Contact: http://www.qt.io/licensing/
+** Copyright (C) 2016 The Qt Company Ltd.
+** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the QtBluetooth module of the Qt Toolkit.
 **
-** $QT_BEGIN_LICENSE:LGPL21$
+** $QT_BEGIN_LICENSE:LGPL$
 ** Commercial License Usage
 ** Licensees holding valid commercial Qt licenses may use this file in
 ** accordance with the commercial license agreement provided with the
 ** Software or, alternatively, in accordance with the terms contained in
 ** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see http://www.qt.io/terms-conditions. For further
-** information use the contact form at http://www.qt.io/contact-us.
+** and conditions see https://www.qt.io/terms-conditions. For further
+** information use the contact form at https://www.qt.io/contact-us.
 **
 ** GNU Lesser General Public License Usage
 ** Alternatively, this file may be used under the terms of the GNU Lesser
-** General Public License version 2.1 or version 3 as published by the Free
-** Software Foundation and appearing in the file LICENSE.LGPLv21 and
-** LICENSE.LGPLv3 included in the packaging of this file. Please review the
-** following information to ensure the GNU Lesser General Public License
-** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
+** General Public License version 3 as published by the Free Software
+** Foundation and appearing in the file LICENSE.LGPL3 included in the
+** packaging of this file. Please review the following information to
+** ensure the GNU Lesser General Public License version 3 requirements
+** will be met: https://www.gnu.org/licenses/lgpl-3.0.html.
 **
-** As a special exception, The Qt Company gives you certain additional
-** rights. These rights are described in The Qt Company LGPL Exception
-** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+** GNU General Public License Usage
+** Alternatively, this file may be used under the terms of the GNU
+** General Public License version 2.0 or (at your option) the GNU General
+** Public license version 3 or any later version approved by the KDE Free
+** Qt Foundation. The licenses are as published by the Free Software
+** Foundation and appearing in the file LICENSE.GPL2 and LICENSE.GPL3
+** included in the packaging of this file. Please review the following
+** information to ensure the GNU General Public License requirements will
+** be met: https://www.gnu.org/licenses/gpl-2.0.html and
+** https://www.gnu.org/licenses/gpl-3.0.html.
 **
 ** $QT_END_LICENSE$
 **
@@ -55,6 +61,24 @@
 class WorkerThread;
 #endif
 
+#ifdef QT_WINRT_BLUETOOTH
+#include <wrl.h>
+
+namespace ABI {
+    namespace Windows {
+        namespace Networking {
+            namespace Sockets {
+                struct IStreamSocket;
+            }
+        }
+        namespace Foundation {
+            struct IAsyncAction;
+            enum class AsyncStatus;
+        }
+    }
+}
+#endif // QT_WINRT_BLUETOOTH
+
 #ifndef QPRIVATELINEARBUFFER_BUFFERSIZE
 #define QPRIVATELINEARBUFFER_BUFFERSIZE Q_INT64_C(16384)
 #endif
@@ -65,6 +89,10 @@ class WorkerThread;
 QT_FORWARD_DECLARE_CLASS(QSocketNotifier)
 
 QT_BEGIN_NAMESPACE
+
+#ifdef QT_WINRT_BLUETOOTH
+class SocketWorker;
+#endif
 
 class QBluetoothServiceDiscoveryAgent;
 
@@ -101,6 +129,7 @@ public:
 #endif
 #ifdef QT_ANDROID_BLUETOOTH
     bool fallBackConnect(QAndroidJniObject uuid, int channel);
+    bool fallBackReversedConnect(const QBluetoothUuid &uuid);
 #endif
 
 
@@ -128,12 +157,19 @@ public:
     bool setSocketDescriptor(const QAndroidJniObject &socket, QBluetoothServiceInfo::Protocol socketType,
                              QBluetoothSocket::SocketState socketState = QBluetoothSocket::ConnectedState,
                              QBluetoothSocket::OpenMode openMode = QBluetoothSocket::ReadWrite);
+#elif defined(QT_WINRT_BLUETOOTH)
+    bool setSocketDescriptor(Microsoft::WRL::ComPtr<ABI::Windows::Networking::Sockets::IStreamSocket> socket,
+                             QBluetoothServiceInfo::Protocol socketType,
+                             QBluetoothSocket::SocketState socketState = QBluetoothSocket::ConnectedState,
+                             QBluetoothSocket::OpenMode openMode = QBluetoothSocket::ReadWrite);
 #endif
     bool setSocketDescriptor(int socketDescriptor, QBluetoothServiceInfo::Protocol socketType,
                              QBluetoothSocket::SocketState socketState = QBluetoothSocket::ConnectedState,
                              QBluetoothSocket::OpenMode openMode = QBluetoothSocket::ReadWrite);
 
     qint64 bytesAvailable() const;
+    bool canReadLine() const;
+    qint64 bytesToWrite() const;
 
 public:
     QPrivateLinearBuffer buffer;
@@ -166,7 +202,8 @@ public:
 public slots:
     void socketConnectSuccess(const QAndroidJniObject &socket);
     void defaultSocketConnectFailed(const QAndroidJniObject & socket,
-                                    const QAndroidJniObject &targetUuid);
+                                    const QAndroidJniObject &targetUuid,
+                                    const QBluetoothUuid &qtTargetUuid);
     void fallbackSocketConnectFailed(const QAndroidJniObject &socket,
                                      const QAndroidJniObject &targetUuid);
     void inputThreadError(int errorCode);
@@ -177,7 +214,25 @@ signals:
 
 #endif
 
-#if defined(QT_BLUEZ_BLUETOOTH)
+#ifdef QT_WINRT_BLUETOOTH
+    SocketWorker *m_worker;
+
+    Microsoft::WRL::ComPtr<ABI::Windows::Networking::Sockets::IStreamSocket> m_socketObject;
+    Microsoft::WRL::ComPtr<ABI::Windows::Foundation::IAsyncAction> m_connectOp;
+
+    QMutex m_readMutex;
+
+    // Protected by m_readMutex. Written in addToPendingData (native callback)
+    QVector<QByteArray> m_pendingData;
+
+    Q_INVOKABLE void addToPendingData(const QVector<QByteArray> &data);
+
+private slots:
+    void handleNewData(const QVector<QByteArray> &data);
+    void handleError(QBluetoothSocket::SocketError error);
+#endif // QT_WINRT_BLUETOOTH
+
+#if QT_CONFIG(bluez)
 private slots:
     void _q_readNotify();
     void _q_writeNotify();
@@ -188,7 +243,11 @@ protected:
 
 private:
 
-#ifdef QT_BLUEZ_BLUETOOTH
+#ifdef QT_WINRT_BLUETOOTH
+    HRESULT handleConnectOpFinished(ABI::Windows::Foundation::IAsyncAction *action, ABI::Windows::Foundation::AsyncStatus status);
+#endif
+
+#if QT_CONFIG(bluez)
 public:
     quint8 lowEnergySocketType;
 #endif
@@ -210,7 +269,7 @@ public slots:
 
 #endif // QT_OSX_BLUETOOTH
 
-static inline void convertAddress(quint64 from, quint8 (&to)[6])
+static inline void convertAddress(const quint64 from, quint8 (&to)[6])
 {
     to[0] = (from >> 0) & 0xff;
     to[1] = (from >> 8) & 0xff;
@@ -220,7 +279,7 @@ static inline void convertAddress(quint64 from, quint8 (&to)[6])
     to[5] = (from >> 40) & 0xff;
 }
 
-static inline quint64 convertAddress(quint8 (&from)[6], quint64 *to = 0)
+static inline quint64 convertAddress(const quint8 (&from)[6], quint64 *to = 0)
 {
     const quint64 result = (quint64(from[0]) << 0) |
          (quint64(from[1]) << 8) |
@@ -232,6 +291,15 @@ static inline quint64 convertAddress(quint8 (&from)[6], quint64 *to = 0)
         *to = result;
     return result;
 }
+
+#ifdef Q_OS_ANDROID
+// QTBUG-61392 related
+// Private API to disable the silent behavior to reverse a remote service's
+// UUID. In rare cases the workaround behavior might not be desirable as
+// it may lead to connects to incorrect services.
+extern bool useReverseUuidWorkAroundConnect;
+
+#endif
 
 QT_END_NAMESPACE
 

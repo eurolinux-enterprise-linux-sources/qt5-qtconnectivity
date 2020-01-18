@@ -8,4 +8,3 @@ osx:QT += widgets
 OTHER_FILES += \
     README.txt
 
-DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0

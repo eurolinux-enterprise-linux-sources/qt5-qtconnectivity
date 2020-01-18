@@ -1,45 +1,54 @@
 /****************************************************************************
 **
-** Copyright (C) 2013 Lauri Laanmets (Proekspert AS) <lauri.laanmets@eesti.ee>
-** Copyright (C) 2015 The Qt Company Ltd.
-** Contact: http://www.qt.io/licensing/
+** Copyright (C) 2016 Lauri Laanmets (Proekspert AS) <lauri.laanmets@eesti.ee>
+** Copyright (C) 2016 The Qt Company Ltd.
+** Contact: https://www.qt.io/licensing/
 **
 ** This file is part of the QtBluetooth module of the Qt Toolkit.
 **
-** $QT_BEGIN_LICENSE:LGPL21$
+** $QT_BEGIN_LICENSE:LGPL$
 ** Commercial License Usage
 ** Licensees holding valid commercial Qt licenses may use this file in
 ** accordance with the commercial license agreement provided with the
 ** Software or, alternatively, in accordance with the terms contained in
 ** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see http://www.qt.io/terms-conditions. For further
-** information use the contact form at http://www.qt.io/contact-us.
+** and conditions see https://www.qt.io/terms-conditions. For further
+** information use the contact form at https://www.qt.io/contact-us.
 **
 ** GNU Lesser General Public License Usage
 ** Alternatively, this file may be used under the terms of the GNU Lesser
-** General Public License version 2.1 or version 3 as published by the Free
-** Software Foundation and appearing in the file LICENSE.LGPLv21 and
-** LICENSE.LGPLv3 included in the packaging of this file. Please review the
-** following information to ensure the GNU Lesser General Public License
-** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
-** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
+** General Public License version 3 as published by the Free Software
+** Foundation and appearing in the file LICENSE.LGPL3 included in the
+** packaging of this file. Please review the following information to
+** ensure the GNU Lesser General Public License version 3 requirements
+** will be met: https://www.gnu.org/licenses/lgpl-3.0.html.
 **
-** As a special exception, The Qt Company gives you certain additional
-** rights. These rights are described in The Qt Company LGPL Exception
-** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
+** GNU General Public License Usage
+** Alternatively, this file may be used under the terms of the GNU
+** General Public License version 2.0 or (at your option) the GNU General
+** Public license version 3 or any later version approved by the KDE Free
+** Qt Foundation. The licenses are as published by the Free Software
+** Foundation and appearing in the file LICENSE.GPL2 and LICENSE.GPL3
+** included in the packaging of this file. Please review the following
+** information to ensure the GNU General Public License requirements will
+** be met: https://www.gnu.org/licenses/gpl-2.0.html and
+** https://www.gnu.org/licenses/gpl-3.0.html.
 **
 ** $QT_END_LICENSE$
 **
 ****************************************************************************/
 
 #include "android/devicediscoverybroadcastreceiver_p.h"
+#include <QtCore/QtEndian>
 #include <QtCore/QLoggingCategory>
 #include <QtBluetooth/QBluetoothAddress>
 #include <QtBluetooth/QBluetoothDeviceInfo>
+#include <QtBluetooth/QBluetoothUuid>
 #include "android/jni_android_p.h"
 #include <QtCore/private/qjnihelpers_p.h>
 #include <QtCore/QHash>
 #include <QtCore/qbitarray.h>
+#include <algorithm>
 
 QT_BEGIN_NAMESPACE
 
@@ -227,6 +236,27 @@ static const MinorClassJavaToQtMapping minorMappings[] = {
     // QBluetoothDevice::UncategorizedDevice
     { Q_NULLPTR, 0 }, // index 64 & separator
 };
+
+/* Advertising Data Type (AD type) for LE scan records, as defined in Bluetooth CSS v6. */
+enum ADType {
+    ADType16BitUuidIncomplete = 0x02,
+    ADType16BitUuidComplete = 0x03,
+    ADType32BitUuidIncomplete = 0x04,
+    ADType32BitUuidComplete = 0x05,
+    ADType128BitUuidIncomplete = 0x06,
+    ADType128BitUuidComplete = 0x07,
+    // .. more will be added when required
+};
+
+// Endianness conversion for quint128 doesn't (yet) exist in qtendian.h
+template <>
+inline quint128 qbswap<quint128>(const quint128 src)
+{
+    quint128 dst;
+    for (int i = 0; i < 16; i++)
+        dst.data[i] = src.data[15 - i];
+    return dst;
+}
 
 QBluetoothDeviceInfo::CoreConfigurations qtBtTypeForJavaBtType(jint javaType)
 {
@@ -419,19 +449,18 @@ void DeviceDiscoveryBroadcastReceiver::onReceive(JNIEnv *env, jobject context, j
 
 // Runs in Java thread
 void DeviceDiscoveryBroadcastReceiver::onReceiveLeScan(
-        JNIEnv *env, jobject jBluetoothDevice, jint rssi)
+        JNIEnv *env, jobject jBluetoothDevice, jint rssi, jbyteArray scanRecord)
 {
-    qCDebug(QT_BT_ANDROID) << "DeviceDiscoveryBroadcastReceiver::onReceiveLeScan()";
     const QAndroidJniObject bluetoothDevice(jBluetoothDevice);
     if (!bluetoothDevice.isValid())
         return;
 
-    const QBluetoothDeviceInfo info = retrieveDeviceInfo(env, bluetoothDevice, rssi);
+    const QBluetoothDeviceInfo info = retrieveDeviceInfo(env, bluetoothDevice, rssi, scanRecord);
     if (info.isValid())
         emit deviceDiscovered(info, true);
 }
 
-QBluetoothDeviceInfo DeviceDiscoveryBroadcastReceiver::retrieveDeviceInfo(JNIEnv *env, const QAndroidJniObject &bluetoothDevice, int rssi)
+QBluetoothDeviceInfo DeviceDiscoveryBroadcastReceiver::retrieveDeviceInfo(JNIEnv *env, const QAndroidJniObject &bluetoothDevice, int rssi, jbyteArray scanRecord)
 {
     const QString deviceName = bluetoothDevice.callObjectMethod<jstring>("getName").toString();
     const QBluetoothAddress deviceAddress(bluetoothDevice.callObjectMethod<jstring>("getAddress").toString());
@@ -478,6 +507,63 @@ QBluetoothDeviceInfo DeviceDiscoveryBroadcastReceiver::retrieveDeviceInfo(JNIEnv
 
     QBluetoothDeviceInfo info(deviceAddress, deviceName, classType);
     info.setRssi(rssi);
+
+    if (scanRecord != nullptr) {
+        // Parse scan record
+        jboolean isCopy;
+        jbyte *elems = env->GetByteArrayElements(scanRecord, &isCopy);
+        const char *scanRecordBuffer = reinterpret_cast<const char *>(elems);
+        const int scanRecordLength = env->GetArrayLength(scanRecord);
+
+        QList<QBluetoothUuid> serviceUuids;
+        int i = 0;
+
+        // Spec 4.2, Vol 3, Part C, Chapter 11
+        while (i < scanRecordLength) {
+            // sizeof(EIR Data) = sizeof(Length) + sizeof(EIR data Type) + sizeof(EIR Data)
+            // Length = sizeof(EIR data Type) + sizeof(EIR Data)
+
+            const int nBytes = scanRecordBuffer[i];
+            if (nBytes == 0)
+                break;
+
+            if ((i + nBytes) >= scanRecordLength)
+                break;
+
+            const int adType = scanRecordBuffer[i+1];
+            const char *dataPtr = &scanRecordBuffer[i+2];
+            QBluetoothUuid foundService;
+
+            switch (adType) {
+            case ADType16BitUuidIncomplete:
+            case ADType16BitUuidComplete:
+                foundService = QBluetoothUuid(qFromLittleEndian<quint16>(dataPtr));
+                break;
+            case ADType32BitUuidIncomplete:
+            case ADType32BitUuidComplete:
+                foundService = QBluetoothUuid(qFromLittleEndian<quint32>(dataPtr));
+                break;
+            case ADType128BitUuidIncomplete:
+            case ADType128BitUuidComplete:
+                foundService =
+                    QBluetoothUuid(qToBigEndian<quint128>(qFromLittleEndian<quint128>(dataPtr)));
+                break;
+            default:
+                // no other types supported yet and therefore skipped
+                // https://www.bluetooth.org/en-us/specification/assigned-numbers/generic-access-profile
+                break;
+            }
+
+            i += nBytes + 1;
+
+            if (!foundService.isNull() && !serviceUuids.contains(foundService))
+                serviceUuids.append(foundService);
+        }
+
+        info.setServiceUuids(serviceUuids, QBluetoothDeviceInfo::DataIncomplete);
+
+        env->ReleaseByteArrayElements(scanRecord, elems, JNI_ABORT);
+    }
 
     if (QtAndroidPrivate::androidSdkVersion() >= 18) {
         jint javaBtType = bluetoothDevice.callMethod<jint>("getType");

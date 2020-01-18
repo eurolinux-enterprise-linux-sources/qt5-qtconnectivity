@@ -74,33 +74,14 @@ linux:!android:qtHaveModule(dbus) {
         qllcpserver_p.cpp \
         qnearfieldsharemanagerimpl_p.cpp \
         qnearfieldsharetargetimpl_p.cpp \
-        qnearfieldmanager_neard.cpp
+        qnearfieldmanager_neard.cpp \
+        qnearfieldtarget_neard_p.cpp
 
     include(neard/neard.pri)
 
-} else:simulator {
+} else:android:!android-embedded {
     NFC_BACKEND_AVAILABLE = yes
-
-    QT_PRIVATE += gui
-
-    PRIVATE_HEADERS += \
-        qnearfieldmanagervirtualbase_p.h \
-        qnearfieldmanager_simulator_p.h \
-        qllcpsocket_simulator_p.h \
-        qllcpserver_simulator_p.h \
-        qnearfieldsharemanagerimpl_p.h \
-        qnearfieldsharetargetimpl_p.h
-
-
-    SOURCES += \
-        qnearfieldmanagervirtualbase.cpp \
-        qnearfieldmanager_simulator.cpp \
-        qllcpsocket_simulator_p.cpp \
-        qllcpserver_simulator_p.cpp \
-        qnearfieldsharemanagerimpl_p.cpp \
-        qnearfieldsharetargetimpl_p.cpp
-} else:android:!android-no-sdk {
-    NFC_BACKEND_AVAILABLE = yes
+    DEFINES += QT_ANDROID_NFC
     ANDROID_PERMISSIONS = \
         android.permission.NFC
     ANDROID_BUNDLED_JAR_DEPENDENCIES = \
@@ -127,6 +108,7 @@ linux:!android:qtHaveModule(dbus) {
         android/androidjninfc.cpp \
         qnearfieldmanager_android.cpp \
         qnearfieldtarget_android.cpp \
+        qnearfieldtarget_android_p.cpp \
         qnearfieldsharemanagerimpl_p.cpp \
         qnearfieldsharetargetimpl_p.cpp \
         android/androidmainnewintentlistener.cpp
@@ -147,7 +129,8 @@ isEmpty(NFC_BACKEND_AVAILABLE) {
         qllcpserver_p.cpp \
         qnearfieldmanagerimpl_p.cpp \
         qnearfieldsharemanagerimpl_p.cpp \
-        qnearfieldsharetargetimpl_p.cpp
+        qnearfieldsharetargetimpl_p.cpp \
+        qnearfieldtarget_p.cpp
 }
 
 HEADERS += $$PUBLIC_HEADERS $$PRIVATE_HEADERS
